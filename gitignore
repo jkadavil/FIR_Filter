@@ -1,0 +1,48 @@
+# ============================================================
+# Vivado project junk — generated, do not commit
+# ============================================================
+
+# Generated project subfolders
+*.gen/
+*.sim/
+*.srcs/**/imports/
+*.runs/
+*.cache/
+*.hw/
+*.ip_user_files/
+*.data/
+
+# Vivado project state / lock files
+*.xpr.orig
+*.jou
+*.log
+*.str
+*.pb
+webtalk*.log
+webtalk*.jou
+vivado*.jou
+vivado*.log
+vivado_pid*.debug
+usage_statistics_webtalk.html
+usage_statistics_webtalk.xml
+.Xil/
+
+# Simulation artifacts
+*.wdb
+*.wcfg.orig
+xsim.dir/
+*.pb
+*.jobs
+*.pyc
+
+# IP cache / generated products (regenerate from .xci)
+**/*.xci.orig
+
+# Journal/backup files
+*~
+*.bak
+*.orig
+
+# OS junk
+.DS_Store
+Thumbs.db
