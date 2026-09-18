@@ -1,54 +1,94 @@
-# 32-Tap FIR Filter (Verilog, AXI4-Stream + AXI4-Lite)
+# 32-Tap Pipelined FIR Accelerator
 
-A pipelined 32-tap FIR filter implemented in Verilog for Xilinx 7-series
-FPGAs (Vivado 2025.2). Samples come in over an AXI4-Stream interface,
-coefficients and control are programmed over AXI4-Lite, and filtered
-output is pushed back out over AXI4-Stream.
+A synthesizable fixed-point FIR accelerator with AXI4-Stream data interfaces,
+AXI4-Lite coefficient programming, FIFO buffering, and a fully pipelined
+parallel multiply-accumulate datapath.
 
-## Features
+## Highlights
 
-- 32-tap FIR filter, runtime-programmable coefficients (no re-synth needed)
-- AXI4-Stream input/output for sample data
-- AXI4-Lite control interface for enable, coefficient load, and status
-- Pipelined multiply-accumulate tree (32 → 16 → 8 → 4 → 2 → 1) for timing closure
-- Input/output AXI-Stream FIFOs for elastic buffering
-- Self-checking testbench with a software reference model
+* 32 signed 16-bit samples and coefficients
+* 40-bit accumulator output
+* 32 parallel multipliers and a five-level registered adder tree
+* One-sample-per-cycle peak throughput
+* Correct AXI4-Stream backpressure from output to input
+* Input and output FIFOs with simultaneous push/pop support
+* Shadow coefficient registers with atomic software-controlled commit
+* Self-checking testbenches, including signed arithmetic and randomized output
+  backpressure
 
-## Module overview
+## Architecture
 
-| File | Description |
-|---|---|
-| `fir_top.v` | Top-level: wires together AXI-Lite control, input FIFO, delay line, DSP core, output FIFO |
-| `fir_axi_lite.v` | AXI4-Lite slave: coefficient RAM, enable/load control registers, status readback |
-| `fir_dsp.v` | Pipelined 32-tap multiply-accumulate datapath |
-| `axis_fifo.v` | Generic circular-buffer AXI4-Stream FIFO (used for both input and output buffering) |
-| `tb_fir_top.v` | Self-checking testbench: drives AXI-Lite writes/reads, streams samples, compares against a reference model |
+```mermaid
+flowchart LR
+    IN[AXI4-Stream input] --> IF[Input FIFO]
+    IF --> DL[32-sample delay line]
+    DL --> DSP[Parallel FIR pipeline]
+    AXI[AXI4-Lite control] --> COEF[Shadow and active coefficients]
+    COEF --> DSP
+    DSP --> OF[Output FIFO]
+    OF --> OUT[AXI4-Stream output]
+```
 
-## AXI4-Lite register map
+The datapath computes
 
-| Address | Register | Access |
-|---|---|---|
-| `0x00` | Control (bit 0 = enable) | R/W |
-| `0x04` | Load (write 1 to latch coefficients into the datapath) | R/W |
-| `0x08` | Status (input/output FIFO full/empty flags) | R |
-| `0x10`–`0x8C` | Coefficient RAM, coeff[0..31], 4 bytes apart | R/W |
+```text
+y[n] = sum(k=0..31) h[k] * x[n-k]
+```
 
-## Getting started
+The current input is used as `x[n]`; no artificial leading-zero output is
+inserted. With no stalls, the DSP accepts one sample every clock. The result is
+available at the output FIFO six clocks after the corresponding delay-line/DSP
+transfer.
 
-1. Open `FIR Filter.xpr` in Vivado 2025.2 (or newer — update the target
-   part in Project Settings if you're not targeting the Kintex-7
-   `xc7k70tfbv676-1`).
-2. Run behavioral simulation (`tb_fir_top` is the default sim top) to
-   confirm `PASS: ALL TESTS PASSED`.
-3. Run synthesis / implementation as normal.
+## Register Map
 
-## Programming sequence
+| Address     | Name       | Access | Description                                                        |
+| ----------- | ---------- | ------ | ------------------------------------------------------------------ |
+| `0x00`      | CONTROL    | R/W    | Bit 0 enables input processing                                     |
+| `0x04`      | COEFF_LOAD | W      | Any write atomically copies shadow coefficients to the active bank |
+| `0x08`      | STATUS     | R      | Bits 0–3: input full, input empty, output full, output empty       |
+| `0x10 + 4k` | COEFF[k]   | R/W    | Signed coefficient shadow register, `k = 0..31`                    |
 
-1. Write each coefficient to `0x10 + 4*i` for `i = 0..31`.
-2. Write `1` to `0x04` (Load) to latch coefficients into the datapath.
-3. Write `1` to `0x00` (Control, bit 0) to enable the filter.
-4. Stream samples in over `s_axis_*`; filtered results appear on `m_axis_*`.
+Software should write all desired shadow coefficients, write `COEFF_LOAD`, and
+then enable the filter. Later shadow writes do not affect filtering until the
+next load command.
 
-## License
+## Source Files
 
-MIT — see `LICENSE`.
+| File             | Purpose                                    |
+| ---------------- | ------------------------------------------ |
+| `fir_top.v`      | Accelerator integration and delay line     |
+| `fir_dsp.v`      | Pipelined multipliers and adder tree       |
+| `axis_fifo.v`    | Parameterized ready/valid FIFO             |
+| `fir_axi_lite.v` | Control, status, and coefficient registers |
+| `tb_fir_top.v`   | End-to-end self-checking stress test       |
+| `tb_fir_dsp.v`   | FIR datapath unit test                     |
+| `tb_axis_fifo.v` | FIFO unit test                             |
+
+## Simulation
+
+Example with Icarus Verilog:
+
+```bash
+iverilog -g2012 -s tb_axis_fifo -o sim_fifo axis_fifo.v tb_axis_fifo.v
+vvp sim_fifo
+
+iverilog -g2012 -s tb_fir_dsp -o sim_dsp fir_dsp.v tb_fir_dsp.v
+vvp sim_dsp
+
+iverilog -g2012 -s tb_fir_top -o sim_top \
+  axis_fifo.v fir_dsp.v fir_axi_lite.v fir_top.v tb_fir_top.v
+vvp sim_top
+```
+
+## Implementation Notes
+
+The arithmetic is two's-complement signed. `ACC_WIDTH` must be selected to
+avoid overflow for the intended sample and coefficient ranges. The current
+top-level datapath exposes 32 explicit sample ports to the DSP module, so
+`NUM_TAPS=32` is the supported integrated configuration.
+
+For a portfolio release, add the Vivado device and clock constraint used for
+synthesis, then report post-synthesis/post-implementation LUT, FF, DSP, BRAM,
+Fmax, and power results here. Those numbers are intentionally not claimed
+without a reproducible implementation run.
