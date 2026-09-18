@@ -92,3 +92,39 @@ For a portfolio release, add the Vivado device and clock constraint used for
 synthesis, then report post-synthesis/post-implementation LUT, FF, DSP, BRAM,
 Fmax, and power results here. Those numbers are intentionally not claimed
 without a reproducible implementation run.
+
+
+## FPGA Implementation Results
+
+The accelerator was implemented using Vivado 2025.2 for a Kintex-7
+`xc7k70tfbv676-1`.
+
+### Resource Utilization
+
+| Resource | Used | Available | Utilization |
+| --- | ---: | ---: | ---: |
+| Slices | 1,029 | 10,250 | 10.04% |
+| Slice LUTs | 1,900 | 41,000 | 4.63% |
+| Flip-flops | 3,793 | 82,000 | 4.63% |
+| DSP48E1 blocks | 32 | 240 | 13.33% |
+| Block RAM tiles | 0 | 135 | 0.00% |
+
+All 32 signed multipliers were mapped to dedicated DSP48E1 blocks. The small
+input and output FIFOs were implemented with registers rather than block RAM.
+
+### Timing and Throughput
+
+| Metric | Result |
+| --- | ---: |
+| Target frequency | 125 MHz |
+| Clock period | 8.000 ns |
+| Worst setup slack | +2.020 ns |
+| Total negative slack | 0.000 ns |
+| Worst hold slack | +0.069 ns |
+| Failing endpoints | 0 |
+| Estimated maximum frequency | Approximately 167 MHz |
+
+The implemented design meets all setup, hold, and pulse-width constraints at
+125 MHz. Since the pipelined datapath can accept one sample per clock, its peak
+throughput is 125 million samples per second, equivalent to approximately
+4.0 billion tap multiply-accumulate operations per second.
