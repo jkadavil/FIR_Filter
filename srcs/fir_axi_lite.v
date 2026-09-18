@@ -12,10 +12,12 @@ module fir_axi_lite #(
     output s_axi_awready,
 
     input [31:0] s_axi_wdata,
+    input [3:0] s_axi_wstrb,
     input s_axi_wvalid,
     output s_axi_wready,
 
     output s_axi_bvalid,
+    output [1:0] s_axi_bresp,
     input s_axi_bready,
 
     input [31:0] s_axi_araddr,
@@ -24,6 +26,7 @@ module fir_axi_lite #(
 
     output [31:0] s_axi_rdata,
     output s_axi_rvalid,
+    output [1:0] s_axi_rresp,
     input s_axi_rready,
 
     output reg enable,
@@ -40,6 +43,7 @@ module fir_axi_lite #(
     reg enable_reg;
     reg load_coeffs_reg;
     reg [COEFF_WIDTH-1:0] coeff_reg [0:NUM_TAPS-1];
+    reg [COEFF_WIDTH-1:0] active_coeff_reg [0:NUM_TAPS-1];
 
     integer i;
 
@@ -52,6 +56,7 @@ module fir_axi_lite #(
     // AXI Write Channel
     reg [31:0] write_addr_reg;
     reg [31:0] write_data_reg;
+    reg [3:0] write_strb_reg;
     reg aw_captured;
     reg w_captured;
     reg bvalid_reg;
@@ -59,6 +64,7 @@ module fir_axi_lite #(
     assign s_axi_awready = !aw_captured && !bvalid_reg;
     assign s_axi_wready = !w_captured && !bvalid_reg;
     assign s_axi_bvalid = bvalid_reg;
+    assign s_axi_bresp = 2'b00;
 
     wire aw_handshake = s_axi_awvalid && s_axi_awready;
     wire w_handshake = s_axi_wvalid && s_axi_wready;
@@ -67,17 +73,16 @@ module fir_axi_lite #(
                       (w_captured || w_handshake) &&
                       !bvalid_reg;
 
-    // FIX: use the address/data actually arriving THIS cycle when there's
-    // no captured value yet, instead of always reading the (still-stale,
-    // not-yet-updated) registers. This closes the one-cycle race that was
-    // causing every write to commit one transaction late.
+    // Select either a previously captured channel or the value handshaking now.
     wire [31:0] write_addr = aw_captured ? write_addr_reg : s_axi_awaddr;
     wire [31:0] write_data = w_captured  ? write_data_reg : s_axi_wdata;
+    wire [3:0] write_strb = w_captured ? write_strb_reg : s_axi_wstrb;
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             write_addr_reg <= 0;
             write_data_reg <= 0;
+            write_strb_reg <= 0;
             aw_captured <= 1'b0;
             w_captured <= 1'b0;
             bvalid_reg <= 1'b0;
@@ -89,6 +94,7 @@ module fir_axi_lite #(
 
             if (w_handshake) begin
                 write_data_reg <= s_axi_wdata;
+                write_strb_reg <= s_axi_wstrb;
                 w_captured <= 1'b1;
             end
 
@@ -103,39 +109,41 @@ module fir_axi_lite #(
         end
     end
 
-    // ============================================================
-    // WRITE DECODE (now uses the live-muxed write_addr / write_data)
-    // ============================================================
-    
+    // Write decode
     wire write_control = write_fire && (write_addr == 32'h00000000);
     wire write_load = write_fire && (write_addr == 32'h00000004);
     wire write_coeff = write_fire &&
                        (write_addr >= 32'h00000010) &&
-                       (write_addr <= 32'h0000008C);
+                       (write_addr < (32'h00000010 + NUM_TAPS*4));
 
-    // ============================================================
-    // CONTROL REGISTER UPDATES
-    // ============================================================
-    
+    // Control and coefficient register updates
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             enable_reg <= 1'b0;
             load_coeffs_reg <= 1'b0;
+            for (i = 0; i < NUM_TAPS; i = i + 1) begin
+                coeff_reg[i] <= {COEFF_WIDTH{1'b0}};
+                active_coeff_reg[i] <= {COEFF_WIDTH{1'b0}};
+            end
         end else begin
             load_coeffs_reg <= 1'b0;
 
             if (write_control) begin
-                enable_reg <= write_data[0];
-                $display("ENABLE set to %0d (addr=0x%h, data=0x%h)", write_data[0], write_addr, write_data);
+                if (write_strb[0])
+                    enable_reg <= write_data[0];
             end
 
             if (write_load) begin
                 load_coeffs_reg <= 1'b1;
-                $display("LOAD set (addr=0x%h, data=0x%h)", write_addr, write_data);
+                for (i = 0; i < NUM_TAPS; i = i + 1)
+                    active_coeff_reg[i] <= coeff_reg[i];
             end
 
             if (write_coeff) begin
-                coeff_reg[(write_addr - 32'h00000010) >> 2] <= write_data[COEFF_WIDTH-1:0];
+                if (write_strb[0])
+                    coeff_reg[(write_addr - 32'h00000010) >> 2][7:0] <= write_data[7:0];
+                if (COEFF_WIDTH > 8 && write_strb[1])
+                    coeff_reg[(write_addr - 32'h00000010) >> 2][15:8] <= write_data[15:8];
             end
         end
     end
@@ -147,6 +155,7 @@ module fir_axi_lite #(
 
     assign s_axi_arready = !read_pending && !rvalid_reg;
     assign s_axi_rvalid = rvalid_reg;
+    assign s_axi_rresp = 2'b00;
 
     wire ar_handshake = s_axi_arvalid && s_axi_arready;
 
@@ -186,7 +195,8 @@ module fir_axi_lite #(
                 input_fifo_full
             };
             default: begin
-                if (read_addr_reg >= 32'h00000010 && read_addr_reg <= 32'h0000008C) begin
+                if (read_addr_reg >= 32'h00000010 &&
+                    read_addr_reg < (32'h00000010 + NUM_TAPS*4)) begin
                     read_data_mux = {{(32-COEFF_WIDTH){1'b0}}, coeff_reg[(read_addr_reg - 32'h00000010) >> 2]};
                 end else begin
                     read_data_mux = 0;
@@ -201,7 +211,7 @@ module fir_axi_lite #(
     genvar g;
     generate
         for (g = 0; g < NUM_TAPS; g = g + 1) begin : PACK_COEFF
-            assign coeff_packed[g*COEFF_WIDTH +: COEFF_WIDTH] = coeff_reg[g];
+            assign coeff_packed[g*COEFF_WIDTH +: COEFF_WIDTH] = active_coeff_reg[g];
         end
     endgenerate
 
