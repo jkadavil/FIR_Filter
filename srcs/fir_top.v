@@ -26,10 +26,12 @@ module fir_top #(
     output s_axi_awready,
 
     input [31:0] s_axi_wdata,
+    input [3:0] s_axi_wstrb,
     input s_axi_wvalid,
     output s_axi_wready,
 
     output s_axi_bvalid,
+    output [1:0] s_axi_bresp,
     input s_axi_bready,
 
     input [31:0] s_axi_araddr,
@@ -38,6 +40,7 @@ module fir_top #(
 
     output [31:0] s_axi_rdata,
     output s_axi_rvalid,
+    output [1:0] s_axi_rresp,
     input s_axi_rready,
 
     // Status outputs
@@ -71,6 +74,11 @@ module fir_top #(
     wire dsp_result_valid;
     wire dsp_result_ready;
     wire dsp_samples_ready;
+    wire input_fifo_s_ready;
+    wire output_fifo_full;
+    wire input_fifo_full_int;
+    wire input_fifo_empty_int;
+    wire output_fifo_empty_int;
     
     integer i;
 
@@ -87,10 +95,12 @@ module fir_top #(
         .s_axi_awready(s_axi_awready),
 
         .s_axi_wdata(s_axi_wdata),
+        .s_axi_wstrb(s_axi_wstrb),
         .s_axi_wvalid(s_axi_wvalid),
         .s_axi_wready(s_axi_wready),
 
         .s_axi_bvalid(s_axi_bvalid),
+        .s_axi_bresp(s_axi_bresp),
         .s_axi_bready(s_axi_bready),
 
         .s_axi_araddr(s_axi_araddr),
@@ -99,6 +109,7 @@ module fir_top #(
 
         .s_axi_rdata(s_axi_rdata),
         .s_axi_rvalid(s_axi_rvalid),
+        .s_axi_rresp(s_axi_rresp),
         .s_axi_rready(s_axi_rready),
 
         .enable(enable),
@@ -121,55 +132,59 @@ module fir_top #(
         .rst_n(rst_n),
         
         .s_axis_tvalid(s_axis_tvalid && enable),
-        .s_axis_tready(s_axis_tready),
+        .s_axis_tready(input_fifo_s_ready),
         .s_axis_tdata(s_axis_tdata),
         
         .m_axis_tvalid(fifo_in_valid),
         .m_axis_tready(fifo_in_ready),
-        .m_axis_tdata(fifo_in_data)
+        .m_axis_tdata(fifo_in_data),
+        .full(input_fifo_full_int),
+        .empty(input_fifo_empty_int)
     );
     
-    assign input_fifo_full = !s_axis_tready;
-    assign input_fifo_empty = !fifo_in_valid;
+    assign s_axis_tready = enable && input_fifo_s_ready;
+    assign input_fifo_full = input_fifo_full_int;
+    assign input_fifo_empty = input_fifo_empty_int;
 
     // Delay Line
-    wire samples_valid = fifo_in_valid;
-    wire samples_ready = 1'b1;
+    wire samples_valid = fifo_in_valid && enable;
+    wire samples_ready = dsp_samples_ready;
     
-    assign fifo_in_ready = samples_ready;
+    assign fifo_in_ready = enable && samples_ready;
     
-    assign sample0  = delay[0];
-    assign sample1  = delay[1];
-    assign sample2  = delay[2];
-    assign sample3  = delay[3];
-    assign sample4  = delay[4];
-    assign sample5  = delay[5];
-    assign sample6  = delay[6];
-    assign sample7  = delay[7];
-    assign sample8  = delay[8];
-    assign sample9  = delay[9];
-    assign sample10 = delay[10];
-    assign sample11 = delay[11];
-    assign sample12 = delay[12];
-    assign sample13 = delay[13];
-    assign sample14 = delay[14];
-    assign sample15 = delay[15];
-    assign sample16 = delay[16];
-    assign sample17 = delay[17];
-    assign sample18 = delay[18];
-    assign sample19 = delay[19];
-    assign sample20 = delay[20];
-    assign sample21 = delay[21];
-    assign sample22 = delay[22];
-    assign sample23 = delay[23];
-    assign sample24 = delay[24];
-    assign sample25 = delay[25];
-    assign sample26 = delay[26];
-    assign sample27 = delay[27];
-    assign sample28 = delay[28];
-    assign sample29 = delay[29];
-    assign sample30 = delay[30];
-    assign sample31 = delay[31];
+    // Include the currently accepted sample in the current dot product.
+    assign sample0  = fifo_in_data;
+    assign sample1  = delay[0];
+    assign sample2  = delay[1];
+    assign sample3  = delay[2];
+    assign sample4  = delay[3];
+    assign sample5  = delay[4];
+    assign sample6  = delay[5];
+    assign sample7  = delay[6];
+    assign sample8  = delay[7];
+    assign sample9  = delay[8];
+    assign sample10 = delay[9];
+    assign sample11 = delay[10];
+    assign sample12 = delay[11];
+    assign sample13 = delay[12];
+    assign sample14 = delay[13];
+    assign sample15 = delay[14];
+    assign sample16 = delay[15];
+    assign sample17 = delay[16];
+    assign sample18 = delay[17];
+    assign sample19 = delay[18];
+    assign sample20 = delay[19];
+    assign sample21 = delay[20];
+    assign sample22 = delay[21];
+    assign sample23 = delay[22];
+    assign sample24 = delay[23];
+    assign sample25 = delay[24];
+    assign sample26 = delay[25];
+    assign sample27 = delay[26];
+    assign sample28 = delay[27];
+    assign sample29 = delay[28];
+    assign sample30 = delay[29];
+    assign sample31 = delay[30];
     
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -245,16 +260,17 @@ module fir_top #(
         .clk(clk),
         .rst_n(rst_n),
         
-        .s_axis_tvalid(dsp_result_valid && enable),
+        .s_axis_tvalid(dsp_result_valid),
         .s_axis_tready(dsp_result_ready),
         .s_axis_tdata(dsp_result),
         
         .m_axis_tvalid(m_axis_tvalid),
         .m_axis_tready(m_axis_tready),
-        .m_axis_tdata(m_axis_tdata)
+        .m_axis_tdata(m_axis_tdata),
+        .full(output_fifo_full),
+        .empty(output_fifo_empty_int)
     );
     
-    assign output_fifo_empty = !m_axis_tvalid;
-    assign dsp_samples_ready = 1'b1;
+    assign output_fifo_empty = output_fifo_empty_int;
 
 endmodule
