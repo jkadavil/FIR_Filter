@@ -13,7 +13,10 @@ module axis_fifo #(
 
     output m_axis_tvalid,
     input m_axis_tready,
-    output [DATA_WIDTH-1:0] m_axis_tdata
+    output [DATA_WIDTH-1:0] m_axis_tdata,
+
+    output full,
+    output empty
 );
 
     localparam PTR_WIDTH = (FIFO_DEPTH <= 1) ? 1 : $clog2(FIFO_DEPTH);
@@ -24,15 +27,14 @@ module axis_fifo #(
     reg [PTR_WIDTH-1:0] rd_ptr;
     reg [CNT_WIDTH-1:0] count;
 
-    wire full;
-    wire empty;
     wire write_enable;
     wire read_enable;
 
     assign full = (count == FIFO_DEPTH);
     assign empty = (count == 0);
 
-    assign s_axis_tready = !full;
+    // Permit a write on the same cycle as a read from a full FIFO.
+    assign s_axis_tready = !full || (m_axis_tvalid && m_axis_tready);
     assign m_axis_tvalid = !empty;
     assign m_axis_tdata = fifo[rd_ptr];
 
