@@ -110,7 +110,11 @@ module fir_dsp #(
         end
     endgenerate
 
-    assign samples_ready = 1'b1;
+    // The whole pipeline is an elastic unit.  If its output is blocked, every
+    // stage holds its data so no result can be overwritten.
+    wire pipeline_advance = !result_valid || result_ready;
+
+    assign samples_ready = pipeline_advance;
     assign output_fifo_empty = !result_valid;
 
     integer i;
@@ -142,7 +146,7 @@ module fir_dsp #(
             for (i = 0; i < 2; i = i + 1)
                 sum_stage4[i] <= {ACC_WIDTH{1'b0}};
 
-        end else begin
+        end else if (pipeline_advance) begin
 
             // Stage 1: 32 multipliers
             valid_stage1 <= samples_valid;
